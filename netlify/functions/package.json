@@ -1,0 +1,9 @@
+{
+  "name": "bitznbobz-functions",
+  "version": "1.0.0",
+  "dependencies": {
+    "openai": "^4.57.0",
+    "cheerio": "^1.0.0",
+    "axios": "^1.6.0"
+  }
+}
