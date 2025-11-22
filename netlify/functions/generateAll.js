@@ -130,7 +130,7 @@ async function fetchHtml(url) {
     throw new Error("Missing SCRAPINGBEE_API_KEY in Netlify environment.");
   }
 
-  // FIX APPLIED HERE → country_code=gb
+  // FIXED: gb not uk
   const apiUrl = `https://app.scrapingbee.com/api/v1/?api_key=${encodeURIComponent(
     apiKey
   )}&render_js=false&country_code=gb&url=${encodeURIComponent(url)}`;
@@ -173,7 +173,7 @@ function extractAmazon($) {
   }
 
   const bullets = $("#feature-bullets li")
-    .map((i, el) => $(el).text().trim())
+    .map((_, el) => $(el).text().trim())
     .get()
     .filter(Boolean);
 
@@ -191,7 +191,7 @@ function extractGeneric($) {
   const price = priceMatch ? priceMatch[0].replace(/\s+/g, "") : "";
 
   const bullets = $("li")
-    .map((i, el) => $(el).text().trim())
+    .map((_, el) => $(el).text().trim())
     .get()
     .filter(t => t.length > 6)
     .slice(0, 12);
@@ -205,11 +205,14 @@ function normalisePriceToNumber(priceStr) {
   return m ? Number(m[1]) : null;
 }
 
-// --- OpenAI AI Enrichment ---
+// --- OpenAI AI Enrichment (bullet-proof) ---
 async function enrichWithAI({ url, title, priceNum, bullets }) {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error("Missing OPENAI_API_KEY in Netlify env.");
   }
+
+  // SAFETY FIX: always ensure bullets is an array
+  bullets = Array.isArray(bullets) ? bullets : [];
 
   const system = `
 You are an expert UK eBay listing assistant for the BITZ’n’BOBZ store.
@@ -377,4 +380,4 @@ function safeJson(s) {
   } catch {
     return {};
   }
-          }
+}
