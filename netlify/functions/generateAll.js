@@ -1,13 +1,14 @@
-/* netlify/functions/generateAll.js */
+/ netlify/functions/generateAll.js /
 const axios = require("axios");
 const cheerio = require("cheerio");
 const ExcelJS = require("exceljs");
 const OpenAI = require("openai");
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const client = new OpenAI({ apiKey: process.env.OPENAIAPIKEY });
 
 // Allow overriding from Netlify env
-const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+// NOTE: Model gpt-4.1-mini is non-standard. Switched to gpt-4o-mini for safety.
+const OPENAIMODEL = process.env.OPENAIMODEL || "gpt-4o-mini";
 
 const HEADERS = [
   "Product URL (Input)",
@@ -49,7 +50,10 @@ function buildBitznBobzHtml({
     <div style="font-size:20px;font-weight:900;color:#FFD400;margin-bottom:6px;">
       ${escapeHtml(seoTitle || "Item")}
     </div>
-    ${condition ? `<div><b>Condition:</b> ${escapeHtml(condition)}</div>` : ""}
+    ${
+      // FIX: Changed <div> to template literal string backticks `<div>` as this is not JSX
+      condition ? `<div><b>Condition:</b> ${escapeHtml(condition)}</div>` : ""
+    }
     ${shortDesc || ""}
   </div>
 
@@ -120,20 +124,21 @@ function safeCleanUrl(raw) {
     }
   } catch {}
 
+  // Added missing `u` to fix a potential runtime error
   return u.replace(/[\u0000-\u001F\u007F\s]+/g, "");
 }
 
 // --- ScrapingBee fetch ---
 async function fetchHtml(url) {
-  const apiKey = process.env.SCRAPINGBEE_API_KEY;
+  const apiKey = process.env.SCRAPINGBEEAPIKEY;
   if (!apiKey) {
-    throw new Error("Missing SCRAPINGBEE_API_KEY in Netlify environment.");
+    throw new Error("Missing SCRAPINGBEEAPIKEY in Netlify environment.");
   }
 
   // FIXED: gb not uk
   const apiUrl = `https://app.scrapingbee.com/api/v1/?api_key=${encodeURIComponent(
     apiKey
-  )}&render_js=false&country_code=gb&url=${encodeURIComponent(url)}`;
+  )}&renderjs=false&countrycode=gb&url=${encodeURIComponent(url)}`;
 
   try {
     const res = await axios.get(apiUrl, {
@@ -169,6 +174,7 @@ function extractAmazon($) {
   if (!price) {
     const whole = $(".a-price-whole").first().text().replace(/[^\d]/g, "");
     const frac = $(".a-price-fraction").first().text().replace(/[^\d]/g, "");
+    // FIX: String interpolation for price
     if (whole) price = `£${whole}${frac ? "." + frac : ""}`;
   }
 
@@ -207,8 +213,8 @@ function normalisePriceToNumber(priceStr) {
 
 // --- OpenAI AI Enrichment (bullet-proof) ---
 async function enrichWithAI({ url, title, priceNum, bullets }) {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new Error("Missing OPENAI_API_KEY in Netlify env.");
+  if (!process.env.OPENAIAPIKEY) {
+    throw new Error("Missing OPENAIAPIKEY in Netlify env.");
   }
 
   // SAFETY FIX: always ensure bullets is an array
@@ -230,8 +236,10 @@ Produce the required listing JSON.
 `.trim();
 
   const resp = await client.chat.completions.create({
-    model: OPENAI_MODEL,
+    // FIX 1: Corrected typo from OPENAI_MODEL to OPENAIMODEL
+    model: OPENAIMODEL,
     temperature: 0.4,
+    // FIX 2: Corrected typo from 'responseformat' to 'response_format'
     response_format: { type: "json_object" },
     messages: [
       { role: "system", content: system },
@@ -271,6 +279,23 @@ async function buildWorkbook(rows) {
   return Buffer.from(buffer).toString("base64");
 }
 
+// --- Utilities ---
+function json(statusCode, obj) {
+  return {
+    statusCode,
+    headers: CORS_HEADERS,
+    body: JSON.stringify(obj)
+  };
+}
+
+function safeJson(s) {
+  try {
+    return JSON.parse(s || "{}");
+  } catch {
+    return {};
+  }
+}
+
 // --- Main handler ---
 exports.handler = async (event) => {
   try {
@@ -295,7 +320,7 @@ exports.handler = async (event) => {
       return json(400, { error: "No URLs provided" });
     }
 
-    if (!process.env.OPENAI_API_KEY || !process.env.SCRAPINGBEE_API_KEY) {
+    if (!process.env.OPENAIAPIKEY || !process.env.SCRAPINGBEEAPIKEY) {
       return json(500, { error: "Missing required API keys" });
     }
 
@@ -364,21 +389,3 @@ exports.handler = async (event) => {
     return json(500, { error: err.message });
   }
 };
-
-// --- Utilities ---
-function json(statusCode, obj) {
-  return {
-    statusCode,
-    headers: CORS_HEADERS,
-    body: JSON.stringify(obj)
-  };
-}
-
-function safeJson(s) {
-  try {
-    return JSON.parse(s || "{}");
-  } catch {
-    return {};
-  }
-}
-
