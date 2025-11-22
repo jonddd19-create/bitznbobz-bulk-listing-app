@@ -27,7 +27,7 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization"
 };
 
-// --- Your BITZ’n’BOBZ HTML WRAPPER (outer shell stays consistent) ---
+// --- BITZ’n’BOBZ HTML WRAPPER ---
 function buildBitznBobzHtml({
   seoTitle,
   condition,
@@ -41,20 +41,16 @@ function buildBitznBobzHtml({
   return `
 <div style="font-family:Aptos,Arial,sans-serif;background:#000;color:#fff;padding:14px;border:3px solid #FFD400;border-radius:12px;">
   <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
-    <div style="font-size:22px;font-weight:900;color:#FFD400;letter-spacing:0.5px;">
-      BITZ’n’BOBZ
-    </div>
-    <div style="font-size:14px;color:#fff;opacity:0.9;">
-      Quality Finds • Fast Post • UK Seller
-    </div>
+    <div style="font-size:22px;font-weight:900;color:#FFD400;">BITZ’n’BOBZ</div>
+    <div style="font-size:14px;color:#fff;opacity:0.9;">Quality Finds • Fast Post • UK Seller</div>
   </div>
 
   <div style="background:#111;border:2px solid #FFD400;border-radius:10px;padding:12px;margin-bottom:12px;">
     <div style="font-size:20px;font-weight:900;color:#FFD400;margin-bottom:6px;">
       ${escapeHtml(seoTitle || "Item")}
     </div>
-    ${condition ? `<div style="font-size:14px;margin-bottom:6px;"><b>Condition:</b> ${escapeHtml(condition)}</div>` : ""}
-    ${shortDesc ? `<div style="font-size:14px;line-height:1.45;">${shortDesc}</div>` : ""}
+    ${condition ? `<div><b>Condition:</b> ${escapeHtml(condition)}</div>` : ""}
+    ${shortDesc || ""}
   </div>
 
   ${featuresHtml ? section("Key Features", featuresHtml) : ""}
@@ -68,7 +64,7 @@ function buildBitznBobzHtml({
     Thanks for choosing BITZ’n’BOBZ — great kit, fair prices, fast UK delivery.
   </div>
 </div>
-  `.trim();
+`.trim();
 }
 
 function section(title, innerHtml) {
@@ -77,7 +73,7 @@ function section(title, innerHtml) {
   <div style="font-size:16px;font-weight:900;color:#FFD400;margin-bottom:6px;">${title}</div>
   <div style="font-size:14px;line-height:1.5;">${innerHtml}</div>
 </div>
-  `.trim();
+`.trim();
 }
 
 function defaultPostage() {
@@ -96,7 +92,7 @@ function defaultReturns() {
     "Returns",
     `<ul>
       <li>30-day returns accepted.</li>
-      <li>Buyer pays return postage unless item is faulty/not as described.</li>
+      <li>Buyer pays return postage unless item is faulty.</li>
       <li>Please keep packaging until you’re happy.</li>
     </ul>`
   );
@@ -109,7 +105,7 @@ function escapeHtml(s = "") {
     .replace(/>/g, "&gt;");
 }
 
-// --- URL cleaning helpers ---
+// --- URL cleaning ---
 function safeCleanUrl(raw) {
   if (!raw) return "";
   let u = String(raw).trim();
@@ -122,31 +118,28 @@ function safeCleanUrl(raw) {
     if (/%[0-9A-Fa-f]{2}/.test(u)) {
       u = decodeURIComponent(u);
     }
-  } catch {
-    // ignore decode failures
-  }
+  } catch {}
 
-  u = u.replace(/[\u0000-\u001F\u007F\s]+/g, "");
-  return u;
+  return u.replace(/[\u0000-\u001F\u007F\s]+/g, "");
 }
 
-// --- Scrape helpers ---
+// --- ScrapingBee fetch ---
 async function fetchHtml(url) {
   const apiKey = process.env.SCRAPINGBEE_API_KEY;
   if (!apiKey) {
     throw new Error("Missing SCRAPINGBEE_API_KEY in Netlify environment.");
   }
 
+  // FIX APPLIED HERE → country_code=gb
   const apiUrl = `https://app.scrapingbee.com/api/v1/?api_key=${encodeURIComponent(
     apiKey
-  )}&render_js=false&country_code=uk&url=${encodeURIComponent(url)}`;
+  )}&render_js=false&country_code=gb&url=${encodeURIComponent(url)}`;
 
   try {
     const res = await axios.get(apiUrl, {
       timeout: 25000,
       headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
+        "User-Agent": "Mozilla/5.0",
         "Accept-Language": "en-GB,en;q=0.9"
       }
     });
@@ -162,6 +155,7 @@ async function fetchHtml(url) {
   }
 }
 
+// --- Scrapers ---
 function extractAmazon($) {
   const title =
     $("#productTitle").text().trim() ||
@@ -170,7 +164,6 @@ function extractAmazon($) {
 
   let price =
     $('meta[property="product:price:amount"]').attr("content") ||
-    $('meta[name="twitter:data1"]').attr("content") ||
     $(".a-price .a-offscreen").first().text().trim();
 
   if (!price) {
@@ -190,7 +183,6 @@ function extractAmazon($) {
 function extractGeneric($) {
   const title =
     $('meta[property="og:title"]').attr("content") ||
-    $('meta[name="title"]').attr("content") ||
     $("h1").first().text().trim() ||
     $("title").text().trim();
 
@@ -213,60 +205,25 @@ function normalisePriceToNumber(priceStr) {
   return m ? Number(m[1]) : null;
 }
 
-// --- OpenAI call (chat.completions JSON mode for max compatibility) ---
+// --- OpenAI AI Enrichment ---
 async function enrichWithAI({ url, title, priceNum, bullets }) {
   if (!process.env.OPENAI_API_KEY) {
-    throw new Error("Missing OPENAI_API_KEY in Netlify environment.");
+    throw new Error("Missing OPENAI_API_KEY in Netlify env.");
   }
 
   const system = `
 You are an expert UK eBay listing assistant for the BITZ’n’BOBZ store.
-Return ONLY valid JSON (no markdown, no commentary).
-Use UK spelling, friendly factual tone, no hype.
-If uncertain, say "Unknown" or leave blank, do not invent model numbers.
-SEO Title must be <= 80 characters.
-Buy It Now price must be a NUMBER in GBP (no £ symbol).
-HTML blocks must be CLEAN inner HTML only (ul/li, p, table allowed) with no outer wrapper.
+Output ONLY valid JSON (no markdown).
+Use UK spelling, factual tone, no hype.
 `.trim();
 
   const user = `
-INPUT URL: ${url}
+URL: ${url}
+TITLE: ${title}
+PRICE: ${priceNum}
+BULLETS: ${bullets.join(", ")}
 
-SCRAPED TITLE: ${title || "Unknown"}
-SCRAPED PRICE GBP (if any): ${priceNum ?? "Unknown"}
-SCRAPED BULLETS:
-${bullets && bullets.length ? bullets.map(b => "- " + b).join("\n") : "None"}
-
-TASK:
-1) Produce a better SEO title for UK eBay (<=80 chars).
-2) Pick the best eBay category name + category code (guess if needed).
-3) Suggest a realistic Buy It Now price in GBP as a number.
-   - If scraped price exists, keep close unless clearly wrong.
-4) Produce short, accurate item specs (1 paragraph or tight bullet list).
-5) Produce inner HTML blocks for:
-   - shortDesc (1–2 paragraphs)
-   - featuresHtml (bullet list)
-   - specsHtml (table or bullets)
-   - whatsInBoxHtml (bullets)
-   - condition (plain text)
-   - postageHtml (bullets, UK couriers)
-   - returnsHtml (bullets)
-
-OUTPUT JSON SHAPE:
-{
-  "seoTitle": "",
-  "categoryName": "",
-  "categoryCode": "",
-  "buyItNowPriceGBP": 0,
-  "itemSpecsText": "",
-  "condition": "",
-  "shortDescHtml": "",
-  "featuresHtml": "",
-  "specsHtml": "",
-  "whatsInBoxHtml": "",
-  "postageHtml": "",
-  "returnsHtml": ""
-}
+Produce the required listing JSON.
 `.trim();
 
   const resp = await client.chat.completions.create({
@@ -280,13 +237,8 @@ OUTPUT JSON SHAPE:
   });
 
   const text = resp.choices?.[0]?.message?.content || "";
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch (e) {
-    throw new Error("AI JSON parse failed: " + e.message + " | raw: " + text.slice(0, 200));
-  }
-  return data;
+
+  return JSON.parse(text);
 }
 
 // --- Excel builder ---
@@ -294,8 +246,7 @@ async function buildWorkbook(rows) {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("BitznBobz Pack");
 
-  ws.addRow(HEADERS);
-  ws.getRow(1).font = { bold: true };
+  ws.addRow(HEADERS).font = { bold: true };
 
   rows.forEach(r => {
     ws.addRow([
@@ -310,7 +261,7 @@ async function buildWorkbook(rows) {
   });
 
   ws.columns.forEach(col => {
-    col.width = Math.min(80, Math.max(18, (col.header || "").length + 6));
+    col.width = Math.min(80, Math.max(18, col.header.length + 6));
   });
 
   const buffer = await wb.xlsx.writeBuffer();
@@ -320,7 +271,6 @@ async function buildWorkbook(rows) {
 // --- Main handler ---
 exports.handler = async (event) => {
   try {
-    // Handle CORS preflight
     if (event.httpMethod === "OPTIONS") {
       return { statusCode: 200, headers: CORS_HEADERS, body: "" };
     }
@@ -331,28 +281,23 @@ exports.handler = async (event) => {
 
     const body = safeJson(event.body);
 
-    // Accept urls as array OR newline/comma separated string
     let urls = [];
-    if (Array.isArray(body?.urls)) {
-      urls = body.urls.filter(Boolean);
-    } else if (typeof body?.urls === "string") {
-      urls = body.urls.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
-    } else if (typeof body?.url === "string") {
-      urls = [body.url.trim()].filter(Boolean);
-    }
+    if (Array.isArray(body.urls)) urls = body.urls;
+    else if (typeof body.urls === "string") urls = body.urls.split(/[\n,]+/);
+    else if (body.url) urls = [body.url];
+
+    urls = urls.map(u => u.trim()).filter(Boolean);
 
     if (!urls.length) {
-      return json(400, { error: "No URLs provided. Expect { urls: [...] }" });
+      return json(400, { error: "No URLs provided" });
     }
 
-    const missing = [];
-    if (!process.env.OPENAI_API_KEY) missing.push("OPENAI_API_KEY");
-    if (!process.env.SCRAPINGBEE_API_KEY) missing.push("SCRAPINGBEE_API_KEY");
-    if (missing.length) {
-      return json(500, { error: "Missing environment variables: " + missing.join(", ") });
+    if (!process.env.OPENAI_API_KEY || !process.env.SCRAPINGBEE_API_KEY) {
+      return json(500, { error: "Missing required API keys" });
     }
 
     const rows = [];
+
     for (const rawUrl of urls) {
       const url = safeCleanUrl(rawUrl);
 
@@ -362,6 +307,7 @@ exports.handler = async (event) => {
 
         const isAmazon = /amazon\./i.test(url);
         const scraped = isAmazon ? extractAmazon($) : extractGeneric($);
+
         const priceNum = normalisePriceToNumber(scraped.price);
 
         const ai = await enrichWithAI({
@@ -374,10 +320,10 @@ exports.handler = async (event) => {
         const finalPrice =
           typeof ai.buyItNowPriceGBP === "number" && ai.buyItNowPriceGBP > 0
             ? ai.buyItNowPriceGBP
-            : (priceNum || "");
+            : (priceNum ?? "");
 
         const fullHtml = buildBitznBobzHtml({
-          seoTitle: ai.seoTitle || scraped.title || "Item",
+          seoTitle: ai.seoTitle || scraped.title,
           condition: ai.condition || "",
           shortDesc: ai.shortDescHtml || "",
           featuresHtml: ai.featuresHtml || "",
@@ -389,21 +335,21 @@ exports.handler = async (event) => {
 
         rows.push({
           url,
-          seoTitle: ai.seoTitle || scraped.title || "",
+          seoTitle: ai.seoTitle || scraped.title,
           categoryName: ai.categoryName || "",
           categoryCode: ai.categoryCode || "",
           buyItNowPriceGBP: finalPrice,
           itemSpecsText: ai.itemSpecsText || "",
           fullHtml
         });
-      } catch (itemErr) {
+      } catch (e) {
         rows.push({
           url,
           seoTitle: "",
           categoryName: "",
           categoryCode: "",
           buyItNowPriceGBP: "",
-          itemSpecsText: "FAILED: " + (itemErr.message || String(itemErr)),
+          itemSpecsText: "FAILED: " + e.message,
           fullHtml: ""
         });
       }
@@ -412,11 +358,11 @@ exports.handler = async (event) => {
     const file = await buildWorkbook(rows);
     return json(200, { file });
   } catch (err) {
-    return json(500, { error: err.message || String(err) });
+    return json(500, { error: err.message });
   }
 };
 
-// --- util responses ---
+// --- Utilities ---
 function json(statusCode, obj) {
   return {
     statusCode,
@@ -426,5 +372,9 @@ function json(statusCode, obj) {
 }
 
 function safeJson(s) {
-  try { return JSON.parse(s || "{}"); } catch { return {}; }
-}
+  try {
+    return JSON.parse(s || "{}");
+  } catch {
+    return {};
+  }
+          }
