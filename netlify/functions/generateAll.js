@@ -123,8 +123,8 @@ function safeCleanUrl(raw) {
     }
   } catch {}
 
-  // CRITICAL FIX: Added 'u' (Unicode) flag to resolve "SyntaxError: Invalid regular expression flags"
-  return u.replace(/[\u0000-\u001F\u007F\s]+/gu, "");
+  // CRITICAL FIX: Changed unicode range to hexadecimal range to avoid "Invalid regular expression flags" error in Netlify/Lambda environment.
+  return u.replace(/[\x00-\x1F\x7F\s]+/g, "");
 }
 
 // --- ScrapingBee fetch ---
