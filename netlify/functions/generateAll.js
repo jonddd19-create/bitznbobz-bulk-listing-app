@@ -11,12 +11,12 @@ const HEADERS = [
   "SEO Title (UK, 80 chars max)",
   "eBay Category",
   "eBay Category Code",
-  "Suggested Buy It Now Price (£)",
+  "Suggested Buy It Now Price (Â£)",
   "Item Specs",
-  "Full HTML Description (BITZ’n’BOBZ Template)"
+  "Full HTML Description (BITZâ€™nâ€™BOBZ Template)"
 ];
 
-// --- Your BITZ’n’BOBZ HTML WRAPPER (outer shell stays consistent) ---
+// --- Your BITZâ€™nâ€™BOBZ HTML WRAPPER (outer shell stays consistent) ---
 function buildBitznBobzHtml({
   seoTitle,
   condition,
@@ -32,10 +32,10 @@ function buildBitznBobzHtml({
 <div style="font-family:Aptos,Arial,sans-serif;background:#000;color:#fff;padding:14px;border:3px solid #FFD400;border-radius:12px;">
   <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
     <div style="font-size:22px;font-weight:900;color:#FFD400;letter-spacing:0.5px;">
-      BITZ’n’BOBZ
+      BITZâ€™nâ€™BOBZ
     </div>
     <div style="font-size:14px;color:#fff;opacity:0.9;">
-      Quality Finds • Fast Post • UK Seller
+      Quality Finds â€¢ Fast Post â€¢ UK Seller
     </div>
   </div>
 
@@ -49,13 +49,13 @@ function buildBitznBobzHtml({
 
   ${featuresHtml ? section("Key Features", featuresHtml) : ""}
   ${specsHtml ? section("Specifications", specsHtml) : ""}
-  ${whatsInBoxHtml ? section("What’s in the Box", whatsInBoxHtml) : ""}
+  ${whatsInBoxHtml ? section("Whatâ€™s in the Box", whatsInBoxHtml) : ""}
 
   ${postageHtml ? section("Postage", postageHtml) : defaultPostage()}
   ${returnsHtml ? section("Returns", returnsHtml) : defaultReturns()}
 
   <div style="margin-top:12px;background:#FFD400;color:#000;padding:10px;border-radius:8px;font-weight:800;font-size:13px;">
-  Thanks for choosing BITZ’n’BOBZ — great kit, fair prices, fast UK delivery.
+  Thanks for choosing BITZâ€™nâ€™BOBZ â€” great kit, fair prices, fast UK delivery.
 </div>
   `.trim();
 }
@@ -75,7 +75,7 @@ function defaultPostage() {
     `<ul>
       <li>Same/next working day dispatch where possible.</li>
       <li>Tracked delivery on most items.</li>
-      <li>Combined postage available — just ask.</li>
+      <li>Combined postage available â€” just ask.</li>
     </ul>`
   );
 }
@@ -86,7 +86,7 @@ function defaultReturns() {
     `<ul>
       <li>30-day returns accepted.</li>
       <li>Buyer pays return postage unless item is faulty/not as described.</li>
-      <li>Please keep packaging until you’re happy.</li>
+      <li>Please keep packaging until youâ€™re happy.</li>
     </ul>`
   );
 }
@@ -100,13 +100,17 @@ function escapeHtml(s = "") {
 
 // --- Scrape helpers ---
 async function fetchHtml(url) {
-  const res = await axios.get(url, {
+  const apiUrl = `https://app.scrapingbee.com/api/v1/?api_key=${process.env.SCRAPINGBEE_API_KEY}&render_js=false&country_code=uk&url=${encodeURIComponent(url)}`;
+
+  const res = await axios.get(apiUrl, {
+    timeout: 20000,
     headers: {
       "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
-    },
-    timeout: 20000
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
+      "Accept-Language": "en-GB,en;q=0.9"
+    }
   });
+
   return res.data;
 }
 
@@ -125,7 +129,7 @@ function extractAmazon($) {
   if (!price) {
     const whole = $(".a-price-whole").first().text().replace(/[^\d]/g, "");
     const frac = $(".a-price-fraction").first().text().replace(/[^\d]/g, "");
-    if (whole) price = `£${whole}${frac ? "." + frac : ""}`;
+    if (whole) price = `Â£${whole}${frac ? "." + frac : ""}`;
   }
 
   const bullets = $("#feature-bullets li")
@@ -144,7 +148,7 @@ function extractGeneric($) {
     $("title").text().trim();
 
   const bodyText = $("body").text();
-  const priceMatch = bodyText.match(/£\s?\d+(?:[.,]\d{2})?/);
+  const priceMatch = bodyText.match(/Â£\s?\d+(?:[.,]\d{2})?/);
   const price = priceMatch ? priceMatch[0].replace(/\s+/g, "") : "";
 
   const bullets = $("li")
@@ -165,12 +169,12 @@ function normalisePriceToNumber(priceStr) {
 // --- OpenAI call ---
 async function enrichWithAI({ url, title, priceNum, bullets }) {
   const system = `
-You are an expert UK eBay listing assistant for the BITZ’n’BOBZ store.
+You are an expert UK eBay listing assistant for the BITZâ€™nâ€™BOBZ store.
 Return ONLY valid JSON (no markdown, no commentary).
 Use UK spelling, friendly factual tone, no hype.
 If uncertain, say "Unknown" or leave blank, do not invent model numbers.
 SEO Title must be <= 80 characters.
-Buy It Now price must be a NUMBER in GBP (no £ symbol).
+Buy It Now price must be a NUMBER in GBP (no Â£ symbol).
 HTML blocks must be CLEAN inner HTML only (ul/li, p, table allowed) with no outer wrapper.
 `.trim();
 
@@ -189,7 +193,7 @@ TASK:
    - If scraped price exists, keep close unless clearly wrong.
 4) Produce short, accurate item specs (1 paragraph or tight bullet list).
 5) Produce inner HTML blocks for:
-   - shortDesc (1–2 paragraphs)
+   - shortDesc (1â€“2 paragraphs)
    - featuresHtml (bullet list)
    - specsHtml (table or bullets)
    - whatsInBoxHtml (bullets)
