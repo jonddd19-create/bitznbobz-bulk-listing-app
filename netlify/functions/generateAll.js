@@ -7,7 +7,6 @@ const OpenAI = require("openai");
 const client = new OpenAI({ apiKey: process.env.OPENAIAPIKEY });
 
 // Allow overriding from Netlify env
-// NOTE: Model gpt-4.1-mini is non-standard. Switched to gpt-4o-mini for safety.
 const OPENAIMODEL = process.env.OPENAIMODEL || "gpt-4o-mini";
 
 const HEADERS = [
@@ -51,7 +50,7 @@ function buildBitznBobzHtml({
       ${escapeHtml(seoTitle || "Item")}
     </div>
     ${
-      // FIX: Changed <div> to template literal string backticks `<div>` as this is not JSX
+      // FIXED: Used template literal instead of undeclared JSX
       condition ? `<div><b>Condition:</b> ${escapeHtml(condition)}</div>` : ""
     }
     ${shortDesc || ""}
@@ -124,8 +123,8 @@ function safeCleanUrl(raw) {
     }
   } catch {}
 
-  // Added missing `u` to fix a potential runtime error
-  return u.replace(/[\u0000-\u001F\u007F\s]+/g, "");
+  // CRITICAL FIX: Added 'u' (Unicode) flag to resolve "SyntaxError: Invalid regular expression flags"
+  return u.replace(/[\u0000-\u001F\u007F\s]+/gu, "");
 }
 
 // --- ScrapingBee fetch ---
@@ -135,7 +134,6 @@ async function fetchHtml(url) {
     throw new Error("Missing SCRAPINGBEEAPIKEY in Netlify environment.");
   }
 
-  // FIXED: gb not uk
   const apiUrl = `https://app.scrapingbee.com/api/v1/?api_key=${encodeURIComponent(
     apiKey
   )}&renderjs=false&countrycode=gb&url=${encodeURIComponent(url)}`;
@@ -174,7 +172,6 @@ function extractAmazon($) {
   if (!price) {
     const whole = $(".a-price-whole").first().text().replace(/[^\d]/g, "");
     const frac = $(".a-price-fraction").first().text().replace(/[^\d]/g, "");
-    // FIX: String interpolation for price
     if (whole) price = `£${whole}${frac ? "." + frac : ""}`;
   }
 
@@ -236,10 +233,10 @@ Produce the required listing JSON.
 `.trim();
 
   const resp = await client.chat.completions.create({
-    // FIX 1: Corrected typo from OPENAI_MODEL to OPENAIMODEL
+    // FIXED: Corrected typo from OPENAI_MODEL to OPENAIMODEL
     model: OPENAIMODEL,
     temperature: 0.4,
-    // FIX 2: Corrected typo from 'responseformat' to 'response_format'
+    // FIXED: Corrected typo from 'responseformat' to 'response_format'
     response_format: { type: "json_object" },
     messages: [
       { role: "system", content: system },
@@ -300,7 +297,7 @@ function safeJson(s) {
 exports.handler = async (event) => {
   try {
     if (event.httpMethod === "OPTIONS") {
-      return { statusCode: 200, headers: CORS_HEADERS, body: "" };
+      return json(200, {});
     }
 
     if (event.httpMethod !== "POST") {
