@@ -1,15 +1,22 @@
+// netlify/functions/generateAll.js
 const axios = require("axios");
 const cheerio = require("cheerio");
 const ExcelJS = require("exceljs");
 const OpenAI = require("openai");
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAIAPIKEY
-});
+// --- ENV helpers (support both underscore + old names) ---
+const OPENAI_API_KEY =
+  process.env.OPENAI_API_KEY || process.env.OPENAIAPIKEY || "";
+const SCRAPINGBEE_API_KEY =
+  process.env.SCRAPINGBEE_API_KEY || process.env.SCRAPINGBEEAPIKEY || "";
 
-const OPENAIMODEL = process.env.OPENAIMODEL || "gpt-4o-mini";
+const OPENAI_MODEL =
+  process.env.OPENAI_MODEL ||
+  process.env.OPENAIMODEL ||
+  "gpt-4o-mini";
 
-// Excel columns
+const client = new OpenAI({ apiKey: OPENAI_API_KEY });
+
 const HEADERS = [
   "Product URL (Input)",
   "SEO Title (UK, 80 chars max)",
@@ -20,6 +27,7 @@ const HEADERS = [
   "Full HTML Description (BITZ’n’BOBZ Template)"
 ];
 
+// --- CORS ---
 const CORS_HEADERS = {
   "Content-Type": "application/json",
   "Access-Control-Allow-Origin": "*",
@@ -27,9 +35,38 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization"
 };
 
-// -------------------------------
-// SIMPLE HTML ESCAPING
-// -------------------------------
+// --- HTML helpers ---
+function section(title, innerHtml) {
+  return `
+<div style="background:#0b0b0b;border:1px solid #333;border-radius:10px;padding:12px;margin-bottom:10px;">
+  <div style="font-size:16px;font-weight:900;color:#FFD400;margin-bottom:6px;">${title}</div>
+  <div style="font-size:14px;line-height:1.5;">${innerHtml}</div>
+</div>
+`.trim();
+}
+
+function defaultPostage() {
+  return section(
+    "Postage",
+    `<ul>
+      <li>Same/next working day dispatch where possible.</li>
+      <li>Tracked delivery on most items.</li>
+      <li>Combined postage available — just ask.</li>
+    </ul>`
+  );
+}
+
+function defaultReturns() {
+  return section(
+    "Returns",
+    `<ul>
+      <li>30-day returns accepted.</li>
+      <li>Buyer pays return postage unless item is faulty.</li>
+      <li>Please keep packaging until you’re happy.</li>
+    </ul>`
+  );
+}
+
 function escapeHtml(s = "") {
   return String(s)
     .replace(/&/g, "&amp;")
@@ -37,51 +74,104 @@ function escapeHtml(s = "") {
     .replace(/>/g, "&gt;");
 }
 
-// -------------------------------
-// AMAZON URL NORMALISATION (Important!)
-// -------------------------------
-function cleanAmazonUrl(url) {
+// --- BITZ’n’BOBZ HTML WRAPPER ---
+function buildBitznBobzHtml({
+  seoTitle,
+  condition,
+  shortDesc,
+  featuresHtml,
+  specsHtml,
+  whatsInBoxHtml,
+  postageHtml,
+  returnsHtml
+}) {
+  return `
+<div style="font-family:Aptos,Arial,sans-serif;background:#000;color:#fff;padding:14px;border:3px solid #FFD400;border-radius:12px;">
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+    <div style="font-size:22px;font-weight:900;color:#FFD400;">BITZ’n’BOBZ</div>
+    <div style="font-size:14px;color:#fff;opacity:0.9;">Quality Finds • Fast Post • UK Seller</div>
+  </div>
+
+  <div style="background:#111;border:2px solid #FFD400;border-radius:10px;padding:12px;margin-bottom:12px;">
+    <div style="font-size:20px;font-weight:900;color:#FFD400;margin-bottom:6px;">
+      ${escapeHtml(seoTitle || "Item")}
+    </div>
+    ${condition ? `<div><b>Condition:</b> ${escapeHtml(condition)}</div>` : ""}
+    ${shortDesc || ""}
+  </div>
+
+  ${featuresHtml ? section("Key Features", featuresHtml) : ""}
+  ${specsHtml ? section("Specifications", specsHtml) : ""}
+  ${whatsInBoxHtml ? section("What’s in the Box", whatsInBoxHtml) : ""}
+
+  ${postageHtml ? section("Postage", postageHtml) : defaultPostage()}
+  ${returnsHtml ? section("Returns", returnsHtml) : defaultReturns()}
+
+  <div style="margin-top:12px;background:#FFD400;color:#000;padding:10px;border-radius:8px;font-weight:800;font-size:13px;">
+    Thanks for choosing BITZ’n’BOBZ — great kit, fair prices, fast UK delivery.
+  </div>
+</div>
+`.trim();
+}
+
+// --- URL cleaning ---
+function safeCleanUrl(raw) {
+  if (!raw) return "";
+  let u = String(raw).trim();
+
+  if (!/^https?:\/\//i.test(u)) {
+    u = "https://" + u;
+  }
+
   try {
-    let u = new URL(url);
+    if (/%[0-9A-Fa-f]{2}/.test(u)) {
+      u = decodeURIComponent(u);
+    }
+  } catch {}
 
-    if (!u.pathname.includes("/dp/")) return url;
+  // remove control chars / whitespace
+  u = u.replace(/[\x00-\x1F\x7F\s]+/g, "");
 
-    const parts = u.pathname.split("/");
-    const dpIndex = parts.indexOf("dp");
-    if (dpIndex === -1 || dpIndex + 1 >= parts.length) return url;
+  // If Amazon URL => canonicalise
+  if (/amazon\./i.test(u)) {
+    u = canonicalAmazonUrl(u);
+  }
 
-    const asin = parts[dpIndex + 1].trim();
+  return u;
+}
 
-    return `https://www.amazon.co.uk/dp/${asin}`;
+// Canonicalise Amazon links to: https://www.amazon.co.uk/dp/ASIN
+function canonicalAmazonUrl(url) {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./, "");
+
+    // grab ASIN in common shapes
+    const asinMatch =
+      parsed.pathname.match(/\/dp\/([A-Z0-9]{10})/i) ||
+      parsed.pathname.match(/\/gp\/product\/([A-Z0-9]{10})/i) ||
+      parsed.pathname.match(/\/product\/([A-Z0-9]{10})/i);
+
+    const asin = asinMatch ? asinMatch[1].toUpperCase() : null;
+    if (!asin) return url;
+
+    // prefer amazon.co.uk if it is a UK link, else keep host
+    const finalHost = host.includes("amazon.co.uk") ? "www.amazon.co.uk" : `www.${host}`;
+    return `https://${finalHost}/dp/${asin}`;
   } catch {
     return url;
   }
 }
 
-// -------------------------------
-// UNIVERSAL URL CLEANING
-// -------------------------------
-function safeCleanUrl(raw) {
-  if (!raw) return "";
-
-  let u = raw.trim();
-
-  if (!/^https?:\/\//i.test(u)) u = "https://" + u;
-
-  // Clean low ascii and whitespace
-  return u.replace(/[\x00-\x1F\x7F\s]+/g, "");
-}
-
-// -------------------------------
-// FETCH HTML USING SCRAPINGBEE
-// -------------------------------
+// --- ScrapingBee fetch ---
 async function fetchHtml(url) {
-  const apiKey = process.env.SCRAPINGBEEAPIKEY;
-  if (!apiKey) throw new Error("Missing SCRAPINGBEEAPIKEY");
+  if (!SCRAPINGBEE_API_KEY) {
+    throw new Error("Missing SCRAPINGBEE_API_KEY in Netlify environment.");
+  }
 
-  const apiUrl =
-    `https://app.scrapingbee.com/api/v1/?api_key=${encodeURIComponent(apiKey)}` +
-    `&render_js=false&country_code=gb&url=${encodeURIComponent(url)}`;
+  const apiUrl = `https://app.scrapingbee.com/api/v1/?api_key=${encodeURIComponent(
+    SCRAPINGBEE_API_KEY
+  )}&renderjs=false&countrycode=gb&url=${encodeURIComponent(url)}`;
 
   try {
     const res = await axios.get(apiUrl, {
@@ -93,15 +183,17 @@ async function fetchHtml(url) {
     });
     return res.data;
   } catch (err) {
-    const s = err?.response?.status;
-    const d = err?.response?.data;
-    throw new Error(`ScrapingBee error ${s || ""}: ${JSON.stringify(d || {})}`);
+    const status = err?.response?.status;
+    const data = err?.response?.data;
+    throw new Error(
+      `ScrapingBee error${status ? " " + status : ""}: ${
+        typeof data === "string" ? data.slice(0, 200) : JSON.stringify(data || {})
+      }`
+    );
   }
 }
 
-// -------------------------------
-// SCRAPERS
-// -------------------------------
+// --- Scrapers ---
 function extractAmazon($) {
   const title =
     $("#productTitle").text().trim() ||
@@ -132,8 +224,8 @@ function extractGeneric($) {
     $("h1").first().text().trim() ||
     $("title").text().trim();
 
-  const body = $("body").text();
-  const priceMatch = body.match(/£\s?\d+(?:[.,]\d{2})?/);
+  const bodyText = $("body").text();
+  const priceMatch = bodyText.match(/£\s?\d+(?:[.,]\d{2})?/);
   const price = priceMatch ? priceMatch[0].replace(/\s+/g, "") : "";
 
   const bullets = $("li")
@@ -145,35 +237,51 @@ function extractGeneric($) {
   return { title, price, bullets };
 }
 
-// -------------------------------
-// PRICE NORMALISATION
-// -------------------------------
-function normalisePriceToNumber(p) {
-  if (!p) return null;
-  const m = p.replace(",", ".").match(/(\d+(\.\d+)?)/);
+function normalisePriceToNumber(priceStr) {
+  if (!priceStr) return null;
+  const m = String(priceStr).replace(",", ".").match(/(\d+(?:\.\d{1,2})?)/);
   return m ? Number(m[1]) : null;
 }
 
-// -------------------------------
-// AI ENRICHMENT (safe JSON guarantee)
-// -------------------------------
+// --- OpenAI enrichment ---
 async function enrichWithAI({ url, title, priceNum, bullets }) {
+  if (!OPENAI_API_KEY) {
+    throw new Error("Missing OPENAI_API_KEY in Netlify env.");
+  }
+
   bullets = Array.isArray(bullets) ? bullets : [];
 
   const system = `
-You write UK-optimised eBay listing JSON.
-Output ONLY valid JSON.
+You are an expert UK eBay listing assistant for the BITZ’n’BOBZ store.
+Output ONLY valid JSON (no markdown).
+Use UK spelling, factual tone, no hype.
+
+Return JSON with keys:
+seoTitle (string, <=80 chars),
+categoryName (string),
+categoryCode (string),
+buyItNowPriceGBP (number),
+condition (string),
+shortDescHtml (string),
+featuresHtml (string),
+specsHtml (string),
+whatsInBoxHtml (string),
+postageHtml (string),
+returnsHtml (string),
+itemSpecsText (string)
 `.trim();
 
   const user = `
 URL: ${url}
 TITLE: ${title}
-PRICE: ${priceNum}
+PRICE_GBP: ${priceNum ?? ""}
 BULLETS: ${bullets.join(" | ")}
+
+Produce the required listing JSON.
 `.trim();
 
   const resp = await client.chat.completions.create({
-    model: OPENAIMODEL,
+    model: OPENAI_MODEL,
     temperature: 0.4,
     response_format: { type: "json_object" },
     messages: [
@@ -183,91 +291,30 @@ BULLETS: ${bullets.join(" | ")}
   });
 
   const text = resp.choices?.[0]?.message?.content || "{}";
-  return JSON.parse(text);
+  return safeJsonParse(text);
 }
 
-// -------------------------------
-// BITZ'N'BOBZ HTML DESCRIPTION BUILDER
-// -------------------------------
-function buildHtml({
-  seoTitle,
-  condition,
-  shortDesc,
-  featuresHtml,
-  specsHtml,
-  whatsInBoxHtml,
-  postageHtml,
-  returnsHtml
-}) {
-  return `
-<div style="font-family:Aptos,Arial;background:#000;color:#fff;padding:14px;border:3px solid #FFD400;border-radius:12px;">
-  <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
-    <div style="font-size:22px;font-weight:900;color:#FFD400;">BITZ’n’BOBZ</div>
-    <div style="font-size:14px;color:#fff;opacity:0.9;">Quality Finds • Fast Post • UK Seller</div>
-  </div>
-
-  <div style="background:#111;border:2px solid #FFD400;border-radius:10px;padding:12px;margin-bottom:12px;">
-    <div style="font-size:20px;font-weight:900;color:#FFD400;margin-bottom:6px;">${escapeHtml(seoTitle)}</div>
-    ${condition ? `<div><b>Condition:</b> ${escapeHtml(condition)}</div>` : ""}
-    ${shortDesc || ""}
-  </div>
-
-  ${featuresHtml ? section("Key Features", featuresHtml) : ""}
-  ${specsHtml ? section("Specifications", specsHtml) : ""}
-  ${whatsInBoxHtml ? section("What’s in the Box", whatsInBoxHtml) : ""}
-  ${postageHtml ? section("Postage", postageHtml) : defaultPostage()}
-  ${returnsHtml ? section("Returns", returnsHtml) : defaultReturns()}
-
-  <div style="margin-top:12px;background:#FFD400;color:#000;padding:10px;border-radius:8px;font-weight:800;font-size:13px;">
-    Thanks for choosing BITZ’n’BOBZ — great kit, fair prices, fast UK delivery.
-  </div>
-</div>
-`.trim();
+function safeJsonParse(s) {
+  try {
+    return JSON.parse(s);
+  } catch {
+    // if model returns any stray text, try to salvage first {...}
+    const m = String(s).match(/\{[\s\S]*\}/);
+    if (m) {
+      try { return JSON.parse(m[0]); } catch {}
+    }
+    return {};
+  }
 }
 
-function section(title, html) {
-  return `
-<div style="background:#0b0b0b;border:1px solid #333;border-radius:10px;padding:12px;margin-bottom:10px;">
-  <div style="font-size:16px;font-weight:900;color:#FFD400;margin-bottom:6px;">
-    ${title}
-  </div>
-  <div style="font-size:14px;line-height:1.5;">${html}</div>
-</div>
-`.trim();
-}
-
-function defaultPostage() {
-  return section(
-    "Postage",
-    `<ul>
-      <li>Same/next working day dispatch where possible.</li>
-      <li>Tracked delivery on most items.</li>
-      <li>Combined postage available — just ask.</li>
-    </ul>`
-  );
-}
-
-function defaultReturns() {
-  return section(
-    "Returns",
-    `<ul>
-      <li>30-day returns accepted.</li>
-      <li>Buyer pays return postage unless item is faulty.</li>
-      <li>Please keep packaging until you're happy.</li>
-    </ul>`
-  );
-}
-
-// -------------------------------
-// EXCEL BUILDER
-// -------------------------------
+// --- Excel builder ---
 async function buildWorkbook(rows) {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("BitznBobz Pack");
 
   ws.addRow(HEADERS).font = { bold: true };
 
-  for (const r of rows) {
+  rows.forEach(r => {
     ws.addRow([
       r.url,
       r.seoTitle,
@@ -277,21 +324,24 @@ async function buildWorkbook(rows) {
       r.itemSpecsText,
       r.fullHtml
     ]);
-  }
-
-  ws.columns.forEach(col => {
-    col.width = 60;
   });
 
-  const buf = await wb.xlsx.writeBuffer();
-  return Buffer.from(buf).toString("base64");
+  ws.columns.forEach(col => {
+    const headerLen = String(col.header || "").length;
+    col.width = Math.min(80, Math.max(18, headerLen + 6));
+  });
+
+  const buffer = await wb.xlsx.writeBuffer();
+  return Buffer.from(buffer).toString("base64");
 }
 
-// -------------------------------
-// JSON HELPER
-// -------------------------------
-function json(status, obj) {
-  return { statusCode: status, headers: CORS_HEADERS, body: JSON.stringify(obj) };
+// --- Utilities ---
+function json(statusCode, obj) {
+  return {
+    statusCode,
+    headers: CORS_HEADERS,
+    body: JSON.stringify(obj)
+  };
 }
 
 function safeJson(s) {
@@ -302,13 +352,16 @@ function safeJson(s) {
   }
 }
 
-// -------------------------------
-// MAIN HANDLER
-// -------------------------------
+// --- Main handler ---
 exports.handler = async (event) => {
   try {
-    if (event.httpMethod === "OPTIONS") return json(200, {});
-    if (event.httpMethod !== "POST") return json(405, { error: "Use POST" });
+    if (event.httpMethod === "OPTIONS") {
+      return json(200, {});
+    }
+
+    if (event.httpMethod !== "POST") {
+      return json(405, { error: "Use POST" });
+    }
 
     const body = safeJson(event.body);
 
@@ -317,28 +370,27 @@ exports.handler = async (event) => {
     else if (typeof body.urls === "string") urls = body.urls.split(/[\n,]+/);
     else if (body.url) urls = [body.url];
 
-    urls = urls.map(u => u.trim()).filter(Boolean);
+    urls = urls.map(u => String(u).trim()).filter(Boolean);
 
-    if (!urls.length) return json(400, { error: "No URLs provided" });
+    if (!urls.length) {
+      return json(400, { error: "No URLs provided" });
+    }
 
-    if (!process.env.OPENAIAPIKEY || !process.env.SCRAPINGBEEAPIKEY) {
+    if (!OPENAI_API_KEY || !SCRAPINGBEE_API_KEY) {
       return json(500, { error: "Missing API keys" });
     }
 
     const rows = [];
 
     for (const rawUrl of urls) {
-      // CLEAN & NORMALISE AMAZON URL
-      let url = safeCleanUrl(rawUrl);
-      url = cleanAmazonUrl(url);
+      const url = safeCleanUrl(rawUrl);
 
       try {
         const html = await fetchHtml(url);
         const $ = cheerio.load(html);
 
-        const scraped = /amazon\./i.test(url)
-          ? extractAmazon($)
-          : extractGeneric($);
+        const isAmazon = /amazon\./i.test(url);
+        const scraped = isAmazon ? extractAmazon($) : extractGeneric($);
 
         const priceNum = normalisePriceToNumber(scraped.price);
 
@@ -350,12 +402,12 @@ exports.handler = async (event) => {
         });
 
         const finalPrice =
-          typeof ai.buyItNowPriceGBP === "number"
+          typeof ai.buyItNowPriceGBP === "number" && ai.buyItNowPriceGBP > 0
             ? ai.buyItNowPriceGBP
             : (priceNum ?? "");
 
-        const fullHtml = buildHtml({
-          seoTitle: ai.seoTitle || scraped.title,
+        const fullHtml = buildBitznBobzHtml({
+          seoTitle: ai.seoTitle || scraped.title || "Item",
           condition: ai.condition || "",
           shortDesc: ai.shortDescHtml || "",
           featuresHtml: ai.featuresHtml || "",
@@ -367,21 +419,21 @@ exports.handler = async (event) => {
 
         rows.push({
           url,
-          seoTitle: ai.seoTitle || scraped.title,
+          seoTitle: ai.seoTitle || scraped.title || "",
           categoryName: ai.categoryName || "",
           categoryCode: ai.categoryCode || "",
           buyItNowPriceGBP: finalPrice,
           itemSpecsText: ai.itemSpecsText || "",
           fullHtml
         });
-      } catch (err) {
+      } catch (e) {
         rows.push({
           url,
           seoTitle: "",
           categoryName: "",
           categoryCode: "",
           buyItNowPriceGBP: "",
-          itemSpecsText: "FAILED: " + err.message,
+          itemSpecsText: "FAILED: " + (e?.message || String(e)),
           fullHtml: ""
         });
       }
@@ -390,6 +442,6 @@ exports.handler = async (event) => {
     const file = await buildWorkbook(rows);
     return json(200, { file });
   } catch (err) {
-    return json(500, { error: err.message });
+    return json(500, { error: err?.message || "Unknown error" });
   }
 };
