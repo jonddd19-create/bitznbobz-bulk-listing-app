@@ -6,6 +6,9 @@ const OpenAI = require("openai");
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+// Allow overriding from Netlify env
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+
 const HEADERS = [
   "Product URL (Input)",
   "SEO Title (UK, 80 chars max)",
@@ -15,6 +18,14 @@ const HEADERS = [
   "Item Specs",
   "Full HTML Description (BITZ’n’BOBZ Template)"
 ];
+
+// --- CORS ---
+const CORS_HEADERS = {
+  "Content-Type": "application/json",
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization"
+};
 
 // --- Your BITZ’n’BOBZ HTML WRAPPER (outer shell stays consistent) ---
 function buildBitznBobzHtml({
@@ -103,23 +114,19 @@ function safeCleanUrl(raw) {
   if (!raw) return "";
   let u = String(raw).trim();
 
-  // add scheme if missing
   if (!/^https?:\/\//i.test(u)) {
     u = "https://" + u;
   }
 
-  // only decode if it looks encoded
   try {
     if (/%[0-9A-Fa-f]{2}/.test(u)) {
       u = decodeURIComponent(u);
     }
   } catch {
-    // ignore decode failures; use raw
+    // ignore decode failures
   }
 
-  // strip whitespace/control chars, keep valid URL characters
   u = u.replace(/[\u0000-\u001F\u007F\s]+/g, "");
-
   return u;
 }
 
@@ -143,7 +150,6 @@ async function fetchHtml(url) {
         "Accept-Language": "en-GB,en;q=0.9"
       }
     });
-
     return res.data;
   } catch (err) {
     const status = err?.response?.status;
@@ -207,7 +213,7 @@ function normalisePriceToNumber(priceStr) {
   return m ? Number(m[1]) : null;
 }
 
-// --- OpenAI call ---
+// --- OpenAI call (chat.completions JSON mode for max compatibility) ---
 async function enrichWithAI({ url, title, priceNum, bullets }) {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error("Missing OPENAI_API_KEY in Netlify environment.");
@@ -263,33 +269,24 @@ OUTPUT JSON SHAPE:
 }
 `.trim();
 
-  const resp = await client.responses.create({
-    model: "gpt-5.1",
-    input: [
+  const resp = await client.chat.completions.create({
+    model: OPENAI_MODEL,
+    temperature: 0.4,
+    response_format: { type: "json_object" },
+    messages: [
       { role: "system", content: system },
       { role: "user", content: user }
     ]
   });
 
-  const text = resp.output_text || "";
-  const jsonStr = extractFirstJsonObject(text);
-  if (!jsonStr) throw new Error("AI did not return JSON.");
-
+  const text = resp.choices?.[0]?.message?.content || "";
   let data;
   try {
-    data = JSON.parse(jsonStr);
+    data = JSON.parse(text);
   } catch (e) {
-    throw new Error("AI JSON parse failed: " + e.message);
+    throw new Error("AI JSON parse failed: " + e.message + " | raw: " + text.slice(0, 200));
   }
-
   return data;
-}
-
-function extractFirstJsonObject(s) {
-  const start = s.indexOf("{");
-  const end = s.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) return null;
-  return s.slice(start, end + 1);
 }
 
 // --- Excel builder ---
@@ -323,18 +320,31 @@ async function buildWorkbook(rows) {
 // --- Main handler ---
 exports.handler = async (event) => {
   try {
+    // Handle CORS preflight
+    if (event.httpMethod === "OPTIONS") {
+      return { statusCode: 200, headers: CORS_HEADERS, body: "" };
+    }
+
     if (event.httpMethod !== "POST") {
       return json(405, { error: "Use POST" });
     }
 
     const body = safeJson(event.body);
-    const urls = Array.isArray(body?.urls) ? body.urls.filter(Boolean) : [];
 
-    if (!urls.length) {
-      return json(400, { error: "No URLs provided." });
+    // Accept urls as array OR newline/comma separated string
+    let urls = [];
+    if (Array.isArray(body?.urls)) {
+      urls = body.urls.filter(Boolean);
+    } else if (typeof body?.urls === "string") {
+      urls = body.urls.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+    } else if (typeof body?.url === "string") {
+      urls = [body.url.trim()].filter(Boolean);
     }
 
-    // fail early with a clear message if env vars are missing
+    if (!urls.length) {
+      return json(400, { error: "No URLs provided. Expect { urls: [...] }" });
+    }
+
     const missing = [];
     if (!process.env.OPENAI_API_KEY) missing.push("OPENAI_API_KEY");
     if (!process.env.SCRAPINGBEE_API_KEY) missing.push("SCRAPINGBEE_API_KEY");
@@ -410,10 +420,7 @@ exports.handler = async (event) => {
 function json(statusCode, obj) {
   return {
     statusCode,
-    headers: {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*"
-    },
+    headers: CORS_HEADERS,
     body: JSON.stringify(obj)
   };
 }
