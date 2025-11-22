@@ -54,7 +54,7 @@ function buildBitznBobzHtml({
   ${postageHtml ? section("Postage", postageHtml) : defaultPostage()}
   ${returnsHtml ? section("Returns", returnsHtml) : defaultReturns()}
 
-  <<div style="margin-top:12px;background:#FFD400;color:#000;padding:10px;border-radius:8px;font-weight:800;font-size:13px;">
+  <div style="margin-top:12px;background:#FFD400;color:#000;padding:10px;border-radius:8px;font-weight:800;font-size:13px;">
   Thanks for choosing BITZ’n’BOBZ — great kit, fair prices, fast UK delivery.
 </div>
   `.trim();
