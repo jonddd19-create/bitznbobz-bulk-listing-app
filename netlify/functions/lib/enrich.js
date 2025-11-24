@@ -2,10 +2,8 @@ const OpenAI = require("openai");
 
 const OPENAI_API_KEY =
   process.env.OPENAI_API_KEY || process.env.OPENAIAPIKEY || "";
-
-// NEW SAFE MODEL NAME VARIABLE
-const OPENAI_MODEL_NAME =
-  process.env.OPENAI_MODEL_NAME || process.env.OPENAIMODELNAME || "gpt-4o-mini";
+const OPENAI_MODEL =
+  process.env.OPENAI_MODEL || process.env.OPENAIMODEL || "gpt-4o-mini";
 
 const client = new OpenAI({ apiKey: OPENAI_API_KEY });
 
@@ -37,7 +35,7 @@ IMAGES: ${(images || []).slice(0, 6).join(" | ")}
 `.trim();
 
   const resp = await client.chat.completions.create({
-    model: OPENAI_MODEL_NAME,
+    model: OPENAI_MODEL,
     temperature: 0.4,
     response_format: { type: "json_object" },
     messages: [
