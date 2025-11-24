@@ -7,9 +7,12 @@ and outputs an eBay UK **12-column Draft Pack** + optional ZIP of product images
 
 1. Push this repo to GitHub (or drag/drop into Netlify).
 2. In Netlify → *Site settings* → *Environment variables*, add:
-   - `OPENAI_API_KEY`
-   - `SCRAPINGBEE_API_KEY`
-   - (optional) `OPENAI_MODEL` → defaults to **gpt-4o-mini**
+Environment variables to add in Netlify:
+
+- OPENAI_API_KEY
+- SCRAPINGBEE_API_KEY
+- OPENAI_MODEL_NAME = gpt-4o-mini
+
 3. Deploy.  
 Netlify will build the React app and your serverless function automatically.
 
