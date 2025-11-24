@@ -1,120 +1,87 @@
+// netlify/functions/lib/scrape.js
 const axios = require("axios");
+const cheerio = require("cheerio");
 
-const SCRAPINGBEE_API_KEY =
-  process.env.SCRAPINGBEE_API_KEY || process.env.SCRAPINGBEEAPIKEY || "";
+const SCRAPINGBEE_API_KEY = process.env.SCRAPINGBEE_API_KEY;
 
-function safeCleanUrl(raw) {
-  if (!raw) return "";
-  let u = String(raw).trim();
-  if (!/^https?:\/\//i.test(u)) u = "https://" + u;
-  try { if (/%[0-9A-Fa-f]{2}/.test(u)) u = decodeURIComponent(u); } catch {}
-  u = u.replace(/[\x00-\x1F\x7F\s]+/g, "");
-  if (/amazon\./i.test(u)) u = canonicalAmazonUrl(u);
-  return u;
-}
+// --- A: Maximum reliability — ALWAYS premium proxy ---
+async function fetchHtml(url) {
+  const apiUrl = `https://app.scrapingbee.com/api/v1/`;
 
-function canonicalAmazonUrl(url) {
+  const params = {
+    api_key: SCRAPINGBEE_API_KEY,
+    url,
+    premium_proxy: "true",
+    country_code: "uk",
+    render_js: "false",
+    block_resources: "false",
+    js_scenario: "false",
+    timeout: 30000,
+    wait: 2000,
+    headers: JSON.stringify({
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
+    }),
+  };
+
   try {
-    const parsed = new URL(url);
-    const asinMatch =
-      parsed.pathname.match(/\/dp\/([A-Z0-9]{10})/i) ||
-      parsed.pathname.match(/\/gp\/product\/([A-Z0-9]{10})/i);
-    const asin = asinMatch ? asinMatch[1].toUpperCase() : null;
-    if (!asin) return url;
-    return `https://www.amazon.co.uk/dp/${asin}`;
-  } catch {
-    return url;
+    const response = await axios.get(apiUrl, { params });
+    return response.data;
+  } catch (err) {
+    throw new Error(
+      `ScrapingBee request failed: ${err.response?.status || ""} ${err.response?.statusText || ""}`
+    );
   }
 }
 
-function shouldSkipUrl(url) {
-  const u = String(url).toLowerCase();
-  if (u.includes("ebay.us/m/")) return true;
-  if (u.includes("bit.ly") || u.includes("tinyurl")) return true;
-  return false;
+function cleanText(str = "") {
+  return str.replace(/\s+/g, " ").trim();
 }
 
-async function fetchHtml(url) {
-  if (!SCRAPINGBEE_API_KEY) throw new Error("Missing SCRAPINGBEE_API_KEY");
-  const apiUrl =
-    `https://app.scrapingbee.com/api/v1/?api_key=${encodeURIComponent(SCRAPINGBEE_API_KEY)}&renderjs=false&countrycode=gb&url=${encodeURIComponent(url)}`;
-  const res = await axios.get(apiUrl, {
-    timeout: 25000,
-    headers: {
-      "User-Agent": "Mozilla/5.0",
-      "Accept-Language": "en-GB,en;q=0.9"
+async function scrapeProduct(url) {
+  const html = await fetchHtml(url);
+  const $ = cheerio.load(html);
+
+  // --- Title ---
+  const title =
+    cleanText($("#productTitle").text()) ||
+    cleanText($("h1").first().text()) ||
+    "";
+
+  // --- Bullets ---
+  const bullets = [];
+  $("#feature-bullets li, ul.a-unordered-list li").each((i, el) => {
+    const t = cleanText($(el).text());
+    if (t && t.length > 2) bullets.push(t);
+  });
+
+  // --- Price ---
+  const price =
+    cleanText($("#priceblock_ourprice").text()) ||
+    cleanText($("#priceblock_dealprice").text()) ||
+    cleanText($(".a-price .a-offscreen").first().text()) ||
+    "";
+
+  // --- Images ---
+  const images = [];
+  $("img").each((i, el) => {
+    const src =
+      $(el).attr("data-src") ||
+      $(el).attr("data-old-hires") ||
+      $(el).attr("src");
+    if (src && src.startsWith("http") && !images.includes(src)) {
+      images.push(src);
     }
   });
-  return res.data;
+
+  return {
+    url,
+    title,
+    bullets,
+    price,
+    images,
+  };
 }
 
-function extractAmazon($) {
-  const title =
-    $("#productTitle").text().trim() ||
-    $('meta[property="og:title"]').attr("content") ||
-    $("title").text().trim();
-
-  let price =
-    $('meta[property="product:price:amount"]').attr("content") ||
-    $(".a-price .a-offscreen").first().text().trim();
-
-  if (!price) {
-    const whole = $(".a-price-whole").first().text().replace(/[^\d]/g, "");
-    const frac = $(".a-price-fraction").first().text().replace(/[^\d]/g, "");
-    if (whole) price = `£${whole}${frac ? "." + frac : ""}`;
-  }
-
-  const bullets = $("#feature-bullets li")
-    .map((_, el) => $(el).text().trim())
-    .get()
-    .filter(Boolean);
-
-  const images = [];
-  $("#altImages img").each((_, el) => {
-    const src = $(el).attr("src");
-    if (src) images.push(src.replace(/_SS\d+_/, "_SL1200_"));
-  });
-
-  return { title, price, bullets, images };
-}
-
-function extractGeneric($) {
-  const title =
-    $('meta[property="og:title"]').attr("content") ||
-    $("h1").first().text().trim() ||
-    $("title").text().trim();
-
-  const bodyText = $("body").text();
-  const priceMatch = bodyText.match(/£\s?\d+(?:[.,]\d{2})?/);
-  const price = priceMatch ? priceMatch[0].replace(/\s+/g, "") : "";
-
-  const bullets = $("li")
-    .map((_, el) => $(el).text().trim())
-    .get()
-    .filter(t => t.length > 6)
-    .slice(0, 12);
-
-  const images = [];
-  $('meta[property="og:image"]').each((_, el) => {
-    const src = $(el).attr("content");
-    if (src) images.push(src);
-  });
-
-  return { title, price, bullets, images };
-}
-
-function normalisePriceToNumber(priceStr) {
-  if (!priceStr) return null;
-  const m = String(priceStr).replace(",", ".").match(/(\d+(?:\.\d{1,2})?)/);
-  return m ? Number(m[1]) : null;
-}
-
-module.exports = {
-  safeCleanUrl,
-  canonicalAmazonUrl,
-  shouldSkipUrl,
-  fetchHtml,
-  extractAmazon,
-  extractGeneric,
-  normalisePriceToNumber
-};
+module.exports = { scrapeProduct };
