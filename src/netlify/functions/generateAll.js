@@ -35,7 +35,11 @@ exports.handler = async (event) => {
       return { statusCode: 200, headers: CORS_HEADERS, body: "{}" };
     }
     if (event.httpMethod !== "POST") {
-      return { statusCode: 405, headers: CORS_HEADERS, body: JSON.stringify({ error: "Use POST" }) };
+      return {
+        statusCode: 405,
+        headers: CORS_HEADERS,
+        body: JSON.stringify({ error: "Use POST" })
+      };
     }
 
     const body = JSON.parse(event.body || "{}");
@@ -48,7 +52,11 @@ exports.handler = async (event) => {
     urls = urls.map(u => safeCleanUrl(u)).filter(Boolean);
 
     if (!urls.length) {
-      return { statusCode: 400, headers: CORS_HEADERS, body: JSON.stringify({ error: "No URLs provided" }) };
+      return {
+        statusCode: 400,
+        headers: CORS_HEADERS,
+        body: JSON.stringify({ error: "No URLs provided" })
+      };
     }
 
     const rows = [];
@@ -85,11 +93,15 @@ exports.handler = async (event) => {
           images: scraped.images
         });
 
-        const seoTitle = (ai.seoTitle || scraped.title || "").trim().slice(0, 80);
+        const seoTitle = (ai.seoTitle || scraped.title || "")
+          .trim()
+          .slice(0, 80);
 
         let priceMinus20 = "";
-        if (priceNum && priceNum > 0) priceMinus20 = Number((priceNum * 0.8).toFixed(2));
-        else if (typeof ai.buyItNowPriceGBP === "number") priceMinus20 = ai.buyItNowPriceGBP;
+        if (priceNum && priceNum > 0)
+          priceMinus20 = Number((priceNum * 0.8).toFixed(2));
+        else if (typeof ai.buyItNowPriceGBP === "number")
+          priceMinus20 = ai.buyItNowPriceGBP;
 
         const fullHtml = buildBitznBobzHtml({
           seoTitle,
@@ -102,21 +114,28 @@ exports.handler = async (event) => {
           returnsHtml: ai.returnsHtml || ""
         });
 
-        const imageUrls = Array.isArray(ai.imageUrls) && ai.imageUrls.length
-          ? ai.imageUrls
-          : (scraped.images || []);
+        const imageUrls =
+          Array.isArray(ai.imageUrls) && ai.imageUrls.length
+            ? ai.imageUrls
+            : scraped.images || [];
 
         imageUrls.forEach((img, i) => {
           imagesToZip.push({
             url: img,
-            filename: `${seoTitle.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-${i + 1}.jpg`
+            filename: `${seoTitle
+              .replace(/[^a-z0-9]+/gi, "-")
+              .toLowerCase()}-${i + 1}.jpg`
           });
         });
 
         rows.push({
           ProductURL: url,
           Action: DEFAULTS.action,
-          SKU: ai.sku || (ai.asin ? `BITZ-${ai.asin}` : `BITZ-ITEM${String(keptIndex + 1).padStart(3, "0")}`),
+          SKU:
+            ai.sku ||
+            (ai.asin
+              ? `BITZ-${ai.asin}`
+              : `BITZ-ITEM${String(keptIndex + 1).padStart(3, "0")}`),
           CategoryID: DEFAULTS.categoryId,
           SEOTitle: seoTitle,
           UPC: DEFAULTS.upc,
@@ -133,6 +152,7 @@ exports.handler = async (event) => {
         keptIndex++;
       } catch (err) {
         logs.push({ url, status: "failed", error: err.message });
+
         rows.push({
           ProductURL: url,
           Action: DEFAULTS.action,
@@ -148,6 +168,7 @@ exports.handler = async (event) => {
           Format: DEFAULTS.format,
           ItemSpecsText: "FAILED: " + err.message
         });
+
         keptIndex++;
       }
     }
